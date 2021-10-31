@@ -1,0 +1,488 @@
+---
+title: "DATA 607 HW Week 10"
+author: "Shane Hylton"
+date: "10/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Example Code
+
+### Citations: 
+
+
+Example code was downloaded from [here](https://www.tidytextmining.com/sentiment.html)
+
+Robinson, Julia Silge and David. “2 Sentiment Analysis with Tidy Data: Text Mining with R.” 2 Sentiment Analysis with Tidy Data | Text Mining with R, https://www.tidytextmining.com/sentiment.html. 
+
+Data Sets:
+Saif M. Mohammad and Peter Turney. (2013), ``Crowdsourcing a Word-Emotion Association Lexicon.'' Computational Intelligence, 29(3): 436-465. [nrc](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm)
+
+Finn Arup Nielsen: [AFINN](http://www2.imm.dtu.dk/pubdb/pubs/6010-full.html)
+
+Bing Liu and Collaborators: [bing](https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html)
+
+Loughran Lexicon:
+Marketing Communications: Web // University of Notre Dame. “Resources // Software Repository for Accounting and Finance // University of Notre Dame.” Software Repository for Accounting and Finance, https://sraf.nd.edu/textual-analysis/resources/#Master%20Dictionary. 
+
+
+#### Comment
+
+Here, the data is loaded and sentiment values are retrieved. 
+
+```{r}
+library(tidyverse)
+library(tidytext)
+library(janeaustenr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(ggplot2)
+library(wordcloud)
+library(reshape2)
+
+get_sentiments("afinn")
+get_sentiments("bing")
+get_sentiments("nrc")
+
+```
+
+### Joining the Data
+
+Next, the data was manipulated to isolate Jane Austen's books and they were further filtered to seek out positive sentiments. Then, the sentiments were plotted and filtered by book. 
+
+```{r}
+tidy_books <- austen_books() %>%
+  group_by(book) %>%
+  mutate(
+    linenumber = row_number(),
+    chapter = cumsum(str_detect(text, 
+                                regex("^chapter [\\divxlc]", 
+                                      ignore_case = TRUE)))) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+
+nrc_joy <- get_sentiments("nrc") %>% 
+  filter(sentiment == "joy")
+
+tidy_books %>%
+  filter(book == "Emma") %>%
+  inner_join(nrc_joy) %>%
+  count(word, sort = TRUE)
+
+jane_austen_sentiment <- tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(book, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+ggplot(jane_austen_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")
+```
+
+### Exploring Pride and Prejudice
+
+Next, focus was placed on Pride and Prejudice. 
+Individual words were selected from the book and sentiments were tabulated on those words. The three data sets, AFINN, bing, and nrc were compared on the same plot. Then, the total positive and negative sentiments are displayed from bing and nrc.
+
+```{r}
+pride_prejudice <- tidy_books %>% 
+  filter(book == "Pride & Prejudice")
+
+pride_prejudice
+
+
+afinn <- pride_prejudice %>% 
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(index = linenumber %/% 80) %>% 
+  summarise(sentiment = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+bing_and_nrc <- bind_rows(
+  pride_prejudice %>% 
+    inner_join(get_sentiments("bing")) %>%
+    mutate(method = "Bing et al."),
+  pride_prejudice %>% 
+    inner_join(get_sentiments("nrc") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    ) %>%
+    mutate(method = "NRC")) %>%
+  count(method, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+bind_rows(afinn, 
+          bing_and_nrc) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+
+get_sentiments("nrc") %>% 
+  filter(sentiment %in% c("positive", "negative")) %>% 
+  count(sentiment)
+
+get_sentiments("bing") %>% 
+  count(sentiment)
+
+```
+
+### Contributions to Sentiment
+
+Here, individual words were explored from the bing data set. The words were plotted to visualize the impact each word had on overall sentiment. 
+
+```{r}
+
+bing_word_counts <- tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts
+
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+
+custom_stop_words <- bind_rows(tibble(word = c("miss"),  
+                                      lexicon = c("custom")), 
+                               stop_words)
+
+custom_stop_words
+```
+
+### Word Clouds
+
+#### Comments:
+
+I would argue that "miss" is not as negative as it seems. It is very likely that most female characters were referred to as Miss. 
+
+```{r}
+tidy_books %>%
+  anti_join(stop_words) %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 100))
+
+tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+
+### Saddest Chapters
+
+Here, the saddest chapters were selected and displayed in a data frame. The ratio represents the sad words as a ratio to the total words in the chapter.
+
+```{r}
+
+p_and_p_sentences <- tibble(text = prideprejudice) %>% 
+  unnest_tokens(sentence, text, token = "sentences")
+
+p_and_p_sentences$sentence[2]
+
+
+austen_chapters <- austen_books() %>%
+  group_by(book) %>%
+  unnest_tokens(chapter, text, token = "regex", 
+                pattern = "Chapter|CHAPTER [\\dIVXLC]") %>%
+  ungroup()
+
+austen_chapters %>% 
+  group_by(book) %>% 
+  summarise(chapters = n())
+
+
+bingnegative <- get_sentiments("bing") %>% 
+  filter(sentiment == "negative")
+
+wordcounts <- tidy_books %>%
+  group_by(book, chapter) %>%
+  summarize(words = n())
+
+tidy_books %>%
+  semi_join(bingnegative) %>%
+  group_by(book, chapter) %>%
+  summarize(negativewords = n()) %>%
+  left_join(wordcounts, by = c("book", "chapter")) %>%
+  mutate(ratio = negativewords/words) %>%
+  filter(chapter != 0) %>%
+  slice_max(ratio, n = 1) %>% 
+  ungroup()
+
+```
+
+## Original Work:
+
+I decided to explore Harry Potter for my corpus of choice. I found an R [package](https://github.com/bradleyboehmke/harrypotter) online that contains all of the text for the seven main books in the Harry Potter series. 
+The problem I ran into was that I could not load the correct harrypotter package. I used install.packages(harrypotter). This was a mistake. There is another Harry Potter House package that was being confused with the books package, and I could not resolve the issue for quite some time. I had to remove the package and restart R and clear all consoles and values in order to finally be able to call the correct package. The package installation command is copied from the original package on github. 
+
+The other sentiment lexicon I found and will be using was found [here](https://cran.r-project.org/web/packages/tidytext/tidytext.pdf)
+
+Loughran-McDonald Sentiment [lexicon](https://sraf.nd.edu/textual-analysis/resources/) 
+
+```{r}
+if (packageVersion("devtools") < 1.6) {
+  install.packages("devtools")
+}
+devtools::install_github("bradleyboehmke/harrypotter", force = TRUE)
+library(harrypotter)
+```
+
+
+```{r}
+
+titles <- c("Philosopher's Stone", "Chamber of Secrets", "Prisoner of Azkaban",
+            "Goblet of Fire", "Order of the Phoenix", "Half-Blood Prince",
+            "Deathly Hallows")
+book <- list(philosophers_stone, chamber_of_secrets, prisoner_of_azkaban,
+              goblet_of_fire, order_of_the_phoenix, half_blood_prince,
+              deathly_hallows)
+
+#df <- data.frame(harrypotter::philosophers_stone)
+
+potter_tidy <-   list(philosophers_stone, chamber_of_secrets, prisoner_of_azkaban,
+              goblet_of_fire, order_of_the_phoenix, half_blood_prince,
+              deathly_hallows) %>%
+  set_names(titles) %>%
+  map_df(as_tibble, .id = "book") %>%
+  mutate(book = factor(book, levels = titles)) %>%
+  drop_na(value) %>%
+  group_by(book) %>%
+  mutate(chapter = row_number(book)) %>%
+  ungroup() %>%
+  unnest_tokens(word, value)  
+
+
+potter_sentiment <- potter_tidy %>%
+  inner_join(get_sentiments("loughran")) %>%
+  count(book, index = chapter, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+ggplot(potter_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  coord_cartesian(ylim = c(-150, 50))+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: Loughran Lexicon")+
+  theme(plot.title = element_text(hjust = 0.5))  
+
+
+potter_sentiment <- potter_tidy %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(book, index = chapter, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+ggplot(potter_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  coord_cartesian(ylim = c(-200, 100))+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: Bing Lexicon")+
+  theme(plot.title = element_text(hjust = 0.5))  
+
+potter_sentiment <- potter_tidy %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(book, index = chapter, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+ggplot(potter_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  coord_cartesian(ylim = c(-300, 100))+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: NRC Lexicon")+
+  theme(plot.title = element_text(hjust = 0.5))  
+
+
+```
+
+### Comments
+
+Order of the Phoenix and Deathly Hallows are the two most negative books across the seven. The book with the most variation appears to be Half-Blood Prince, which is most clearly evidenced in the visualization using the Bing Lexicon. 
+
+
+### Sentiments
+
+From the three different sentiment lexicons, the Harry Potter books on the whole appear to offer overwhelmingly negative sentiments. 
+
+After the third book, the books are divided into more chapters and they seem to get progressively more negative. The widest range seems to be in Order of the Phoenix, so I will analyze that book. 
+
+```{r}
+
+order_phx <- potter_tidy %>% 
+  filter(book == "Order of the Phoenix")
+
+order_phx
+
+afinn <- order_phx %>% 
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(index = chapter) %>% 
+  summarise(sentiment = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+bing_and_nrc <- bind_rows(
+  order_phx %>% 
+    inner_join(get_sentiments("bing")) %>%
+    mutate(method = "Bing et al."),
+  order_phx %>% 
+    inner_join(get_sentiments("nrc") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    ) %>%
+    mutate(method = "NRC")) %>%
+  count(method, index = chapter, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+loughran <- order_phx %>% 
+    inner_join(get_sentiments("loughran")) %>%
+    mutate(method = "Loughran") %>%
+    group_by(index = chapter) %>%
+    filter(sentiment %in% c("positive", "negative")) %>%
+    mutate(method = "Loughran") %>%
+  count(method, index = chapter, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+bind_rows(afinn, 
+          bing_and_nrc, loughran) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  coord_cartesian(ylim = c(-300, 125))+
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+
+```
+
+## Further Analysis
+
+NRC seems the most polarized, so I will use NRC to find the ratio of negative words to total words. 
+One peculiar result is that the Loughran Lexicon did not return any positive sentiments. 
+
+```{r}
+
+get_sentiments("nrc") %>% 
+  filter(sentiment %in% c("positive", "negative")) %>% 
+  count(sentiment)
+
+get_sentiments("bing") %>% 
+  count(sentiment)
+
+get_sentiments("loughran") %>% 
+  filter(sentiment %in% c("positive", "negative")) %>% 
+  count(sentiment)
+
+stone_chapters <- as.numeric(nrow(data.frame(harrypotter::philosophers_stone)))
+chamber_chapters <- as.numeric(nrow(data.frame(harrypotter::chamber_of_secrets)))
+prisoner_chapters <- as.numeric(nrow(data.frame(harrypotter::prisoner_of_azkaban)))
+goblet_chapters <- as.numeric(nrow(data.frame(harrypotter::goblet_of_fire)))
+order_chapters <- as.numeric(nrow(data.frame(harrypotter::order_of_the_phoenix)))
+prince_chapters <- as.numeric(nrow(data.frame(harrypotter::half_blood_prince)))
+deathly_chapters <- as.numeric(nrow(data.frame(harrypotter::deathly_hallows)))
+
+chapters <- data.frame(c(stone_chapters, chamber_chapters, prisoner_chapters, goblet_chapters, order_chapters, prince_chapters, deathly_chapters))
+chapters <- cbind(titles,chapters)
+colnames(chapters) <- c("title", "count")
+
+
+nrcnegative <- get_sentiments("nrc") %>% 
+  filter(sentiment == "negative")
+
+wordcounts <- potter_tidy %>%
+  group_by(book, chapter) %>%
+  summarize(words = n())
+
+potter_tidy %>%
+  semi_join(nrcnegative) %>%
+  group_by(book, chapter) %>%
+  summarize(negativewords = n()) %>%
+  left_join(wordcounts, by = c("book", "chapter")) %>%
+  mutate(ratio = negativewords/words) %>%
+  filter(chapter != 0) %>%
+  slice_max(ratio, n = 1) %>% 
+  ungroup()
+
+```
+
+
+## Conclusions and Alternative Plots
+
+The most variation is found in the Order of the Phoenix and Deathly Hallows books. The Bing lexicon seems to be the most effective at getting a wider range of outcomes, which is more in line with expectation in a book. Having all of the lexicons available makes for a more accurate idea of the reality of the data. It appears that the Harry Potter books are largely negative, but I would like to explore which emotion is the main cause of the negativity. My guess is that anger would contribute more to the overall sentiment than sadness would. 
+
+Sadness contributed on average just slightly more than anger. 
+
+```{r}
+
+ggplot(potter_sentiment, aes(index, sentiment, fill = book, color = book)) +
+  geom_line(show.legend = FALSE) +
+  coord_cartesian(ylim = c(-300, 100))+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: NRC Lexicon")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+ggplot(potter_sentiment, aes(index, sentiment, fill = book, color = book)) +
+  geom_line(show.legend = FALSE) +
+  coord_cartesian(ylim = c(-300, 100))+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: NRC Lexicon")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth()
+
+ggplot(potter_sentiment, aes(index, sadness, color = book)) +
+  geom_line()+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: Sadness")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+ggplot(potter_sentiment, aes(index, anger, color = book)) +
+  geom_line()+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: Anger")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(potter_sentiment, aes(index, fear, color = book)) +
+  geom_line()+
+  facet_wrap(~book, ncol = 2, scales = "free_x")+
+  ggtitle("Harry Potter Sentiments: Fear")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+sentiments_avg <- colMeans(potter_sentiment[3:13])
+category <- colnames(potter_sentiment[3:13])
+avg <- data.frame()
+avg <- data.frame(cbind(category,as.numeric(sentiments_avg)))
+colnames(avg) <- c("category", "avg")
+rownames(avg) <- c(1:11)
+avg$category <- as.factor(avg$category)
+avg$avg <- as.numeric(avg$avg)
+
+
+ggplot(avg, aes(x = category, y = avg, fill = category)) +
+  geom_col(stat = "identity")+
+  ggtitle("Harry Potter Sentiment Contributions")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_x_discrete(guide = guide_axis(n.dodge = 3))
+
+```
+
